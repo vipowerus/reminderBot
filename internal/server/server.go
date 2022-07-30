@@ -58,11 +58,115 @@ func (s *Server) Start() error {
 	}
 
 	s.configureBotUpdates()
-	s.logger.Info("api server is started")
+	s.logger.Info("Telegram bot started!")
 
 	s.handleBotUpdates()
 
 	return nil
+}
+
+// handleStartCommand ...
+func (s *Server) handleStartCommand(update tgbotapi.Update) {
+	if err := s.store.AddUser(update.Message.Chat.ID); err != nil {
+		s.logger.Error(err)
+	}
+
+	msgText := "Hello! Nice to meet you \nPlease enter the group number"
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, msgText)
+	if _, err := s.bot.Send(msg); err != nil {
+		s.logger.Error(err)
+	}
+}
+
+// handleHelpCommand ...
+func (s *Server) handleHelpCommand(update tgbotapi.Update) {
+	msgText := "Someday there will be help"
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, msgText)
+	if _, err := s.bot.Send(msg); err != nil {
+		s.logger.Error(err)
+	}
+}
+
+// handleChangeGroupCommand
+func (s *Server) handleChangeGroupCommand(update tgbotapi.Update) {
+	if len(update.Message.CommandArguments()) == 0 {
+		msgText := "Please add the group number to the command"
+		msg := tgbotapi.NewMessage(update.Message.Chat.ID, msgText)
+		if _, err := s.bot.Send(msg); err != nil {
+			s.logger.Error(err)
+		}
+	}
+	s.logger.Println(update.Message.CommandArguments() + "!!!!!!!!!!")
+	//@TODO change group here
+}
+
+// handleDefaultCommand
+func (s *Server) handleDefaultCommand(update tgbotapi.Update) {
+	//@TODO implement a default command handler for unsupported commands
+}
+
+func (s *Server) handleDefaultMessage(update tgbotapi.Update) {
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
+	hasGroup, err := s.store.UserInGroup(update.Message.From.ID)
+	if err != nil {
+		s.logger.Error(err)
+	}
+
+	if hasGroup {
+		msg.Text = "У вас уже есть группа. Вы можете сменить ее с помощью команды '/change *****'"
+		s.bot.Send(msg)
+		return
+	}
+	if isGroupNumber(s, update.Message.Text) {
+		resp, err := http.Get("https://table.nsu.ru/group/" + update.Message.Text)
+		if err != nil || resp.StatusCode == 404 {
+			msg.Text = "Не могу найти ваше расписание"
+			s.bot.Send(msg)
+			return
+		}
+		exists, err := s.store.ScheduleExists(update.Message.Text)
+		if err != nil {
+			msg.Text = "Я сламался" // rework and add variable to Text!!!
+			s.bot.Send(msg)
+			s.logger.Error(err)
+			return
+		}
+		if !exists {
+			schedule, err := Parse(resp, "div.subject", "div.room a")
+			if err != nil {
+				msg.Text = "Я сламался" // rework
+				s.bot.Send(msg)
+				s.logger.Error(err)
+				return
+			}
+			if err := s.store.AddSchedule(update.Message.Text, schedule); err != nil {
+				msg.Text = "Я сламался" // rework
+				s.bot.Send(msg)
+				s.logger.Error(err)
+				return
+			}
+		}
+		if err := s.store.AddUserToSchedule(update.Message.From.ID, update.Message.Text); err != nil {
+			msg.Text = "Я сламался" // rework
+			s.bot.Send(msg)
+			s.logger.Error(err)
+			return
+		}
+		if err := s.store.UpdateUserHasGroup(true, update.Message.From.ID); err != nil { // CHECK IT!!!!!!!!!!
+			msg.Text = "Я сламался" // rework
+			s.bot.Send(msg)
+			s.logger.Error(err)
+			return
+		}
+		msg.Text = "Вы добавлены на рассылку по расписанию группы " + update.Message.Text
+		s.bot.Send(msg)
+		return
+
+	} else {
+		msg.Text = "Некорректный номер группы. Я умею работать с такими номерами: [0-9][0-9][0-9][0-9][0-9]"
+		s.bot.Send(msg)
+		return
+	}
 }
 
 // handleBotUpdates ...
@@ -70,94 +174,32 @@ func (s *Server) handleBotUpdates() {
 	updates := s.bot.GetUpdatesChan(s.updatesConf)
 	for update := range updates {
 		if update.Message != nil {
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
+			s.logger.Info("Incomig message: " + update.Message.Text)
 
 			switch update.Message.Command() {
 			case "start":
-				msg.Text += "Введите номер группы:"
-				if err := s.store.AddUser(update.Message.From.ID); err != nil {
-					s.logger.Error(err)
-				}
-				s.bot.Send(msg)
+				s.handleStartCommand(update)
 				continue
+
 			case "help":
-				msg.Text += "Здесь будет help когда-нибудь"
+				s.handleHelpCommand(update)
+				continue
+
 			case "change":
-				if len(update.Message.CommandArguments()) == 0 {
-					msg.Text = "Пожалуйста, добавьте к команде номер новой группы"
-					s.bot.Send(msg)
-					continue
-				}
-				s.logger.Println(update.Message.CommandArguments() + "!!!!!!!!!!")
-				// change group here
+				s.handleChangeGroupCommand(update)
+				continue
+			default:
+				s.handleDefaultCommand(update)
 			}
 
 			switch update.Message.Text {
 			case "open":
-				msg.Text = "chid a"
+				//@TODO Handle "open" command here
+
 			default:
-				hasGroup, err := s.store.UserInGroup(update.Message.From.ID)
-				if err != nil {
-					s.logger.Error(err)
-				}
-				if hasGroup {
-					msg.Text = "У вас уже есть группа. Вы можете сменить ее с помощью команды '/change *****'"
-					s.bot.Send(msg)
-					continue
-				}
-				if isGroupNumber(s, update.Message.Text) {
-					resp, err := http.Get("https://table.nsu.ru/group/" + update.Message.Text)
-					if err != nil || resp.StatusCode == 404 {
-						msg.Text = "Не могу найти ваше расписание"
-						s.bot.Send(msg)
-						continue
-					}
-					exists, err := s.store.ScheduleExists(update.Message.Text)
-					if err != nil {
-						msg.Text = "Я сламался" // rework and add variable to Text!!!
-						s.bot.Send(msg)
-						s.logger.Error(err)
-						continue
-					}
-					if !exists {
-						schedule, err := Parse(resp, "div.subject", "div.room a")
-						if err != nil {
-							msg.Text = "Я сламался" // rework
-							s.bot.Send(msg)
-							s.logger.Error(err)
-							continue
-						}
-						if err := s.store.AddSchedule(update.Message.Text, schedule); err != nil {
-							msg.Text = "Я сламался" // rework
-							s.bot.Send(msg)
-							s.logger.Error(err)
-							continue
-						}
-					}
-					if err := s.store.AddUserToSchedule(update.Message.From.ID, update.Message.Text); err != nil {
-						msg.Text = "Я сламался" // rework
-						s.bot.Send(msg)
-						s.logger.Error(err)
-						continue
-					}
-					if err := s.store.UpdateUserHasGroup(true, update.Message.From.ID); err != nil { // CHECK IT!!!!!!!!!!
-						msg.Text = "Я сламался" // rework
-						s.bot.Send(msg)
-						s.logger.Error(err)
-						continue
-					}
-					msg.Text = "Вы добавлены на рассылку по расписанию группы " + update.Message.Text
-					s.bot.Send(msg)
-					continue
+				s.handleDefaultMessage(update)
 
-				} else {
-					msg.Text = "Некорректный номер группы. Я умею работать с такими номерами: [0-9][0-9][0-9][0-9][0-9]"
-					s.bot.Send(msg)
-					continue
-				}
 			}
-
-			s.bot.Send(msg)
 		}
 	}
 }
