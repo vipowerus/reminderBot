@@ -5,12 +5,9 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
 	"log"
-	"net"
 	"net/http"
 	"regexp"
-	constants "reminder/internal"
 	"reminder/pkg/store"
-	"time"
 )
 
 // Config ...
@@ -28,8 +25,8 @@ func NewConfig() *Config {
 	}
 }
 
-// APIServer ...
-type Server struct {
+// Microservice ...
+type Microservice struct {
 	config      *Config
 	logger      *logrus.Logger
 	store       *store.Store
@@ -38,175 +35,56 @@ type Server struct {
 }
 
 // New ...
-func New(config *Config) *Server {
-	return &Server{
+func New(config *Config) *Microservice {
+	return &Microservice{
 		config: config,
 		logger: logrus.New(),
 	}
 }
 
 // Start ...
-func (s *Server) Start() error {
-	if err := s.configureLogger(); err != nil {
+func (ms *Microservice) Start() error {
+	if err := ms.configureLogger(); err != nil {
 		return err
 	}
 
-	if err := s.configureStore(); err != nil {
+	if err := ms.configureStore(); err != nil {
 		return err
 	}
 
-	if err := s.configureBot(); err != nil {
+	if err := ms.configureBot(); err != nil {
 		return err
 	}
 
-	s.configureBotUpdates()
-	s.logger.Info("Telegram bot started!")
+	ms.configureBotUpdates()
+	ms.logger.Info("Telegram bot started!")
 
-	s.handleBotUpdates()
+	ms.handleBotUpdates()
 
 	return nil
 }
 
-// handleStartCommand ...
-func (s *Server) handleStartCommand(update tgbotapi.Update) {
-	if err := s.store.AddUser(update.Message.Chat.ID); err != nil {
-		s.logger.Error(err)
-	}
-
-	msgText := constants.StartCommandMessage
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, msgText)
-	if _, err := s.bot.Send(msg); err != nil {
-		s.logger.Error(err)
-	}
-}
-
-// handleHelpCommand ...
-func (s *Server) handleHelpCommand(update tgbotapi.Update) {
-	msgText := constants.HelpCommandMessage
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, msgText)
-	if _, err := s.bot.Send(msg); err != nil {
-		s.logger.Error(err)
-	}
-}
-
-// handleChangeGroupCommand
-func (s *Server) handleChangeGroupCommand(update tgbotapi.Update) {
-	if len(update.Message.CommandArguments()) == 0 {
-		msgText := constants.ChangeGroupCommandMessage
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, msgText)
-		if _, err := s.bot.Send(msg); err != nil {
-			s.logger.Error(err)
-		}
-	}
-	s.logger.Println(update.Message.CommandArguments() + "!!!!!!!!!!")
-	//@TODO change group here
-}
-
-// handleDefaultCommand
-func (s *Server) handleDefaultCommand(update tgbotapi.Update) {
-	//@TODO implement a default command handler for unsupported commands
-}
-
-// handleDefaultMessage Processes a message that did not pass the condition for processing by any other handler
-func (s *Server) handleDefaultMessage(update tgbotapi.Update) {
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
-	hasGroup, err := s.store.UserInGroup(update.Message.From.ID)
-	if err != nil {
-		s.logger.Error(err)
-		return
-	}
-
-	if hasGroup {
-		msg.Text = constants.HasGroupMessage
-		s.bot.Send(msg)
-		return
-	}
-
-	if isGroupNumber(s, update.Message.Text) {
-		if _, err := net.DialTimeout("tcp", "mysyte:myport", time.Second); err != nil {
-			msg.Text = constants.ScheduleNotAvailableMessage
-			s.bot.Send(msg)
-			return
-		}
-
-		s.getScheduleAndAttachToUser(update)
-	} else {
-		msg.Text = constants.IncorrectGroupNumberMessage
-		s.bot.Send(msg)
-		return
-	}
-}
-
-func (s *Server) getScheduleAndAttachToUser(update tgbotapi.Update) {
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
-
-	resp, err := http.Get("https://table.nsu.ru/group/" + update.Message.Text)
-	if err != nil || resp.StatusCode == 404 {
-		msg.Text = constants.NoScheduleFoundMessage
-		s.bot.Send(msg)
-		return
-	}
-	exists, err := s.store.ScheduleExists(update.Message.Text)
-	if err != nil {
-		msg.Text = constants.InternalErrorMessage
-		s.bot.Send(msg)
-		s.logger.Error(err)
-		return
-	}
-	if !exists {
-		schedule, err := Parse(resp, "div.subject", "div.room a")
-		if err != nil {
-			msg.Text = constants.InternalErrorMessage
-			s.bot.Send(msg)
-			s.logger.Error(err)
-			return
-		}
-		if err := s.store.AddSchedule(update.Message.Text, schedule); err != nil {
-			msg.Text = constants.InternalErrorMessage
-			s.bot.Send(msg)
-			s.logger.Error(err)
-			return
-		}
-	}
-	if err := s.store.AddUserToSchedule(update.Message.From.ID, update.Message.Text); err != nil {
-		msg.Text = constants.InternalErrorMessage
-		s.bot.Send(msg)
-		s.logger.Error(err)
-		return
-	}
-	// @TODO recheck this function
-	if err := s.store.UpdateUserHasGroup(update.Message.From.ID, 1); err != nil {
-		msg.Text = constants.InternalErrorMessage
-		s.bot.Send(msg)
-		s.logger.Error(err)
-		return
-	}
-	msg.Text = constants.UserAddedToScheduleMessage + update.Message.Text
-	s.bot.Send(msg)
-	return
-}
-
 // handleBotUpdates ...
-func (s *Server) handleBotUpdates() {
-	updates := s.bot.GetUpdatesChan(s.updatesConf)
+func (ms *Microservice) handleBotUpdates() {
+	updates := ms.bot.GetUpdatesChan(ms.updatesConf)
 	for update := range updates {
 		if update.Message != nil {
-			s.logger.Info("Incomig message: " + update.Message.Text)
+			ms.logger.Info("Incomig message: " + update.Message.Text)
 
 			switch update.Message.Command() {
 			case "start":
-				s.handleStartCommand(update)
+				ms.handleStartCommand(update)
 				continue
 
 			case "help":
-				s.handleHelpCommand(update)
+				ms.handleHelpCommand(update)
 				continue
 
 			case "change":
-				s.handleChangeGroupCommand(update)
+				ms.handleChangeGroupCommand(update)
 				continue
 			default:
-				s.handleDefaultCommand(update)
+				ms.handleDefaultCommand(update)
 			}
 
 			switch update.Message.Text {
@@ -214,7 +92,7 @@ func (s *Server) handleBotUpdates() {
 				// @TODO Handle "open" command here
 
 			default:
-				s.handleDefaultMessage(update)
+				ms.handleDefaultMessage(update)
 
 			}
 		}
@@ -240,41 +118,41 @@ func Parse(resp *http.Response, selector1, selector2 string) ([7][6]string, erro
 	return rooms, nil
 }
 
-func (s *Server) configureLogger() error {
-	level, err := logrus.ParseLevel(s.config.LogLevel)
+func (ms *Microservice) configureLogger() error {
+	level, err := logrus.ParseLevel(ms.config.LogLevel)
 	if err != nil {
 		return err
 	}
-	s.logger.SetLevel(level)
+	ms.logger.SetLevel(level)
 	return nil
 }
 
-func (s *Server) configureStore() error {
-	st := store.New(s.config.Store)
+func (ms *Microservice) configureStore() error {
+	st := store.New(ms.config.Store)
 	if err := st.Open(); err != nil {
 		return err
 	}
-	s.store = st
+	ms.store = st
 	return nil
 }
 
-func (s *Server) configureBot() error {
-	bot, err := tgbotapi.NewBotAPI(s.config.BotToken)
+func (ms *Microservice) configureBot() error {
+	bot, err := tgbotapi.NewBotAPI(ms.config.BotToken)
 	if err != nil {
 		return err
 	}
 	bot.Debug = false
-	s.bot = bot
-	log.Printf("Authorized on account %s", bot.Self.UserName)
+	ms.bot = bot
+	log.Printf("Authorized on account %ms", bot.Self.UserName)
 	return nil
 }
 
-func (s *Server) configureBotUpdates() {
-	s.updatesConf = tgbotapi.NewUpdate(0)
-	s.updatesConf.Timeout = 60
+func (ms *Microservice) configureBotUpdates() {
+	ms.updatesConf = tgbotapi.NewUpdate(0)
+	ms.updatesConf.Timeout = 60
 }
 
-func isGroupNumber(s *Server, userGroup string) bool {
+func isGroupNumber(s *Microservice, userGroup string) bool {
 	matched, err := regexp.Match(`^\d\d\d\d\d$`, []byte(userGroup))
 	if err != nil {
 		s.logger.Error(err)
