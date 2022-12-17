@@ -4,11 +4,11 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"reminder/pkg/store"
 
 	"github.com/PuerkitoBio/goquery"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
-	store "github.com/vipowerus/reminder/internal/store"
 )
 
 // Config ...
@@ -117,6 +117,7 @@ func (s *Server) handleDefaultMessage(update tgbotapi.Update) {
 		s.bot.Send(msg)
 		return
 	}
+
 	if isGroupNumber(s, update.Message.Text) {
 		resp, err := http.Get("https://table.nsu.ru/group/" + update.Message.Text)
 		if err != nil || resp.StatusCode == 404 {
@@ -126,7 +127,7 @@ func (s *Server) handleDefaultMessage(update tgbotapi.Update) {
 		}
 		exists, err := s.store.ScheduleExists(update.Message.Text)
 		if err != nil {
-			msg.Text = "Я сламался" // rework and add variable to Text!!!
+			msg.Text = "Internal error"
 			s.bot.Send(msg)
 			s.logger.Error(err)
 			return
@@ -134,26 +135,27 @@ func (s *Server) handleDefaultMessage(update tgbotapi.Update) {
 		if !exists {
 			schedule, err := Parse(resp, "div.subject", "div.room a")
 			if err != nil {
-				msg.Text = "Я сламался" // rework
+				msg.Text = "Internal error"
 				s.bot.Send(msg)
 				s.logger.Error(err)
 				return
 			}
 			if err := s.store.AddSchedule(update.Message.Text, schedule); err != nil {
-				msg.Text = "Я сламался" // rework
+				msg.Text = "Internal error"
 				s.bot.Send(msg)
 				s.logger.Error(err)
 				return
 			}
 		}
 		if err := s.store.AddUserToSchedule(update.Message.From.ID, update.Message.Text); err != nil {
-			msg.Text = "Я сламался" // rework
+			msg.Text = "Internal error"
 			s.bot.Send(msg)
 			s.logger.Error(err)
 			return
 		}
-		if err := s.store.UpdateUserHasGroup(true, update.Message.From.ID); err != nil { // CHECK IT!!!!!!!!!!
-			msg.Text = "Я сламался" // rework
+		// @TODO recheck this function
+		if err := s.store.UpdateUserHasGroup(update.Message.From.ID, 1); err != nil {
+			msg.Text = "Internal error"
 			s.bot.Send(msg)
 			s.logger.Error(err)
 			return
@@ -194,7 +196,7 @@ func (s *Server) handleBotUpdates() {
 
 			switch update.Message.Text {
 			case "open":
-				//@TODO Handle "open" command here
+				// @TODO Handle "open" command here
 
 			default:
 				s.handleDefaultMessage(update)

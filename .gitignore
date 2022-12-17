@@ -22,3 +22,4 @@ configs/env.toml
 
 # Internal IDE files
 .vscode/
+.idea/

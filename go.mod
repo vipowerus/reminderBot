@@ -1,4 +1,4 @@
-module github.com/vipowerus/reminder
+module reminder
 
 go 1.17
 
