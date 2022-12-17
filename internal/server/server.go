@@ -1,14 +1,16 @@
 package server
 
 import (
-	"log"
-	"net/http"
-	"regexp"
-
 	"github.com/PuerkitoBio/goquery"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
-	store "github.com/vipowerus/reminder/internal/store"
+	"log"
+	"net"
+	"net/http"
+	"regexp"
+	constants "reminder/internal"
+	"reminder/pkg/store"
+	"time"
 )
 
 // Config ...
@@ -71,7 +73,7 @@ func (s *Server) handleStartCommand(update tgbotapi.Update) {
 		s.logger.Error(err)
 	}
 
-	msgText := "Hello! Nice to meet you \nPlease enter the group number"
+	msgText := constants.StartCommandMessage
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, msgText)
 	if _, err := s.bot.Send(msg); err != nil {
 		s.logger.Error(err)
@@ -80,7 +82,7 @@ func (s *Server) handleStartCommand(update tgbotapi.Update) {
 
 // handleHelpCommand ...
 func (s *Server) handleHelpCommand(update tgbotapi.Update) {
-	msgText := "Someday there will be help"
+	msgText := constants.HelpCommandMessage
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, msgText)
 	if _, err := s.bot.Send(msg); err != nil {
 		s.logger.Error(err)
@@ -90,7 +92,7 @@ func (s *Server) handleHelpCommand(update tgbotapi.Update) {
 // handleChangeGroupCommand
 func (s *Server) handleChangeGroupCommand(update tgbotapi.Update) {
 	if len(update.Message.CommandArguments()) == 0 {
-		msgText := "Please add the group number to the command"
+		msgText := constants.ChangeGroupCommandMessage
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, msgText)
 		if _, err := s.bot.Send(msg); err != nil {
 			s.logger.Error(err)
@@ -105,68 +107,83 @@ func (s *Server) handleDefaultCommand(update tgbotapi.Update) {
 	//@TODO implement a default command handler for unsupported commands
 }
 
+// handleDefaultMessage Processes a message that did not pass the condition for processing by any other handler
 func (s *Server) handleDefaultMessage(update tgbotapi.Update) {
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
 	hasGroup, err := s.store.UserInGroup(update.Message.From.ID)
 	if err != nil {
 		s.logger.Error(err)
+		return
 	}
 
 	if hasGroup {
-		msg.Text = "У вас уже есть группа. Вы можете сменить ее с помощью команды '/change *****'"
+		msg.Text = constants.HasGroupMessage
 		s.bot.Send(msg)
 		return
 	}
-	if isGroupNumber(s, update.Message.Text) {
-		resp, err := http.Get("https://table.nsu.ru/group/" + update.Message.Text)
-		if err != nil || resp.StatusCode == 404 {
-			msg.Text = "Не могу найти ваше расписание"
-			s.bot.Send(msg)
-			return
-		}
-		exists, err := s.store.ScheduleExists(update.Message.Text)
-		if err != nil {
-			msg.Text = "Я сламался" // rework and add variable to Text!!!
-			s.bot.Send(msg)
-			s.logger.Error(err)
-			return
-		}
-		if !exists {
-			schedule, err := Parse(resp, "div.subject", "div.room a")
-			if err != nil {
-				msg.Text = "Я сламался" // rework
-				s.bot.Send(msg)
-				s.logger.Error(err)
-				return
-			}
-			if err := s.store.AddSchedule(update.Message.Text, schedule); err != nil {
-				msg.Text = "Я сламался" // rework
-				s.bot.Send(msg)
-				s.logger.Error(err)
-				return
-			}
-		}
-		if err := s.store.AddUserToSchedule(update.Message.From.ID, update.Message.Text); err != nil {
-			msg.Text = "Я сламался" // rework
-			s.bot.Send(msg)
-			s.logger.Error(err)
-			return
-		}
-		if err := s.store.UpdateUserHasGroup(true, update.Message.From.ID); err != nil { // CHECK IT!!!!!!!!!!
-			msg.Text = "Я сламался" // rework
-			s.bot.Send(msg)
-			s.logger.Error(err)
-			return
-		}
-		msg.Text = "Вы добавлены на рассылку по расписанию группы " + update.Message.Text
-		s.bot.Send(msg)
-		return
 
+	if isGroupNumber(s, update.Message.Text) {
+		if _, err := net.DialTimeout("tcp", "mysyte:myport", time.Second); err != nil {
+			msg.Text = constants.ScheduleNotAvailableMessage
+			s.bot.Send(msg)
+			return
+		}
+
+		s.getScheduleAndAttachToUser(update)
 	} else {
-		msg.Text = "Некорректный номер группы. Я умею работать с такими номерами: [0-9][0-9][0-9][0-9][0-9]"
+		msg.Text = constants.IncorrectGroupNumberMessage
 		s.bot.Send(msg)
 		return
 	}
+}
+
+func (s *Server) getScheduleAndAttachToUser(update tgbotapi.Update) {
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
+
+	resp, err := http.Get("https://table.nsu.ru/group/" + update.Message.Text)
+	if err != nil || resp.StatusCode == 404 {
+		msg.Text = constants.NoScheduleFoundMessage
+		s.bot.Send(msg)
+		return
+	}
+	exists, err := s.store.ScheduleExists(update.Message.Text)
+	if err != nil {
+		msg.Text = constants.InternalErrorMessage
+		s.bot.Send(msg)
+		s.logger.Error(err)
+		return
+	}
+	if !exists {
+		schedule, err := Parse(resp, "div.subject", "div.room a")
+		if err != nil {
+			msg.Text = constants.InternalErrorMessage
+			s.bot.Send(msg)
+			s.logger.Error(err)
+			return
+		}
+		if err := s.store.AddSchedule(update.Message.Text, schedule); err != nil {
+			msg.Text = constants.InternalErrorMessage
+			s.bot.Send(msg)
+			s.logger.Error(err)
+			return
+		}
+	}
+	if err := s.store.AddUserToSchedule(update.Message.From.ID, update.Message.Text); err != nil {
+		msg.Text = constants.InternalErrorMessage
+		s.bot.Send(msg)
+		s.logger.Error(err)
+		return
+	}
+	// @TODO recheck this function
+	if err := s.store.UpdateUserHasGroup(update.Message.From.ID, 1); err != nil {
+		msg.Text = constants.InternalErrorMessage
+		s.bot.Send(msg)
+		s.logger.Error(err)
+		return
+	}
+	msg.Text = constants.UserAddedToScheduleMessage + update.Message.Text
+	s.bot.Send(msg)
+	return
 }
 
 // handleBotUpdates ...
@@ -194,7 +211,7 @@ func (s *Server) handleBotUpdates() {
 
 			switch update.Message.Text {
 			case "open":
-				//@TODO Handle "open" command here
+				// @TODO Handle "open" command here
 
 			default:
 				s.handleDefaultMessage(update)
@@ -246,7 +263,7 @@ func (s *Server) configureBot() error {
 	if err != nil {
 		return err
 	}
-	bot.Debug = true
+	bot.Debug = false
 	s.bot = bot
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 	return nil

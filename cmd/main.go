@@ -4,9 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"reminder/internal/server"
 
 	"github.com/BurntSushi/toml"
-	"github.com/vipowerus/reminder/internal/server"
 )
 
 var (
